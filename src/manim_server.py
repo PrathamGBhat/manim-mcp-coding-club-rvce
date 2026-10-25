@@ -2,9 +2,17 @@ import subprocess
 import tempfile
 import os
 import shutil
-from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP()
+try:
+    from mcp.server.fastmcp import FastMCP  # v1
+    mcp = FastMCP()
+except Exception:
+    try:
+        from mcp.server.mcpserver import MCPServer  # v2
+        mcp = MCPServer("manim-server")
+    except Exception:
+        from mcp.server import FastMCP  # fallback
+        mcp = FastMCP()
 
 # Get Manim executable path from environment variables or assume it's in the system PATH
 MANIM_EXECUTABLE = os.getenv("MANIM_EXECUTABLE", "manim")   #MANIM_PATH "/Users/[Your_username]/anaconda3/envs/manim2/Scripts/manim.exe"
@@ -62,7 +70,3 @@ def cleanup_manim_temp_dir(directory: str) -> str:
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
-
-
-
-
