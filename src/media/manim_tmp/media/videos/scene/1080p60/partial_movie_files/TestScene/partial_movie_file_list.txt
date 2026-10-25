@@ -1,2 +1,0 @@
-# This file records the segment order used by Manim.
-file 'file:C:/Users/ADMIN/OneDrive/Desktop/manim-mcp-server/src/media/manim_tmp/media/videos/scene/1080p60/partial_movie_files/TestScene/6dfa545d43e438a72ed308eacd0e60e52cf217021dd19ea74c046a91b428f8a5.mp4'

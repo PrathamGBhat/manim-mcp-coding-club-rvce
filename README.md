@@ -1,122 +1,92 @@
 # Manim MCP Server
 
-![Manim MCP Demo](Demo-manim-mcp.gif)
-
-
-## Overview
-
-This is an MCP (Model Context Protocol) server that executes Manim animation code and returns the generated video. It allows users to send Manim scripts and receive the rendered animation.
-
 ## Features
 
-- Executes Manim Python scripts.
-- Saves animation output in a visible media folder.
-- Allows users to clean up temporary files after execution.
-- Portable and configurable via environment variables.
+- **Dynamic Execution**: Renders Manim Python scripts directly to a scratch directory (`media/manim_tmp`).
+- **Permanent Saves**: Persist finalized animations into topic-based folders (`media/<name>/`) on demand.
+- **Model-Agnostic**: Guided by built-in system prompt instructions embedded at server startup.
+- **Self-Contained**: Isolated virtual environment (`venv`) with no global dependencies.
 
-## Installation
+---
 
-### Prerequisites
+## Tools Provided
 
-Ensure you have the following installed:
+| Tool | Description |
+| :--- | :--- |
+| `execute_manim_code` | Executes Python Manim code and renders video to `media/manim_tmp`. |
+| `save_animation_folder` | Copies rendered animation files to a permanent, named folder under `media/`. |
+| `cleanup_manim_temp_dir` | Cleans up and removes temporary directories to free disk space. |
 
-- Python 3.8+
-- Manim (Community Version)
-- MCP
+---
 
-### Install Manim
+## Quickstart
 
-```sh
-pip install manim
+### 1. Clone & Setup Environment
+
+```bash
+git clone https://github.com/PrathamGBhat/manim-mcp-coding-club-rvce.git
+cd manim-mcp-coding-club-rvce
+
+# Create and activate virtual environment
+python -m venv venv
+
+# Windows (PowerShell)
+.\venv\Scripts\Activate.ps1
+# Linux / macOS
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-### Install MCP
+### 2. Configure Environment (`.env`)
 
-```sh
-pip install mcp
+Ensure `.env` in the project root points to your Manim binary:
+
+```env
+MANIM_EXECUTABLE="/absolute/path/to/manim-mcp-coding-club-rvce/venv/Scripts/manim.exe"
 ```
 
-### Clone the Repository
+---
 
-```sh
-git clone https://github.com/abhiemj/manim-mcp-server.git
-cd manim-mcp-server
-```
+## Client Configuration
 
-## Integration with Claude
+### OpenCode (`~/.config/opencode/opencode.jsonc`)
 
-To integrate the Manim MCP server with Claude, add the following to your `claude_desktop_config.json` file:
-
-```json
+```jsonc
 {
-  "mcpServers": {
-     "manim-server": {
-      "command": "/absolute/path/to/python",
-      "args": [
-        "/absolute/path/to/manim-mcp-server/src/manim_server.py"
-      ],
-      "env": {
-        "MANIM_EXECUTABLE": "/Users/[Your_username]/anaconda3/envs/manim2/Scripts/manim.exe"
-      }
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "manim": {
+      "type": "local",
+      "command": [
+        "/absolute/path/to/venv/Scripts/python.exe",
+        "/absolute/path/to/src/manim_server.py"
+      ]
     }
   }
 }
 ```
 
-### Finding Your Python Path
+### Claude Desktop (`claude_desktop_config.json`)
 
-To find your Python executable path, use the following command:
-
-#### Windows (PowerShell):
-```sh
-(Get-Command python).Source
+```json
+{
+  "mcpServers": {
+    "manim": {
+      "command": "/absolute/path/to/venv/Scripts/python.exe",
+      "args": [
+        "/absolute/path/to/src/manim_server.py"
+      ]
+    }
+  }
+}
 ```
 
-#### Windows (Command Prompt/Terminal):
-```sh
-where python
-```
+---
 
-#### Linux/macOS (Terminal):
-```sh
-which python
-```
+## Example Prompt
 
-This ensures that Claude can communicate with the Manim MCP server to generate animations dynamically.
+Once connected to your MCP client, prompt your assistant:
 
-## Contributing
-
-1. Fork the repository.
-2. Create a new branch:
-   ```sh
-   git checkout -b add-feature
-   ```
-3. Make changes and commit:
-   ```sh
-   git commit -m "Added a new feature"
-   ```
-4. Push to your fork:
-   ```sh
-   git push origin add-feature
-   ```
-5. Open a pull request.
-
-## License
-
-This MCP server is licensed under the MIT License. This means you are free to use, modify, and distribute the software, subject to the terms and conditions of the MIT License. For more details, please see the LICENSE file in the project repository.
-
-## Author
-
-Created by **[abhiemj](https://github.com/abhiemj)**. Contributions welcome! 🚀
-
-### **Listed in Awesome MCP Servers**  
-This repository is featured in the [Awesome MCP Servers](https://github.com/punkpeye/awesome-mcp-servers) repository under the **Animation & Video** category. Check it out along with other great MCP server implementations!
-
-
-## **Acknowledgments**  
-- Thanks to the [Manim Community](https://www.manim.community/) for their amazing animation library.  
-- Inspired by the open-source MCP ecosystem.
-
-## Find me at
-<a href="https://www.instagram.com/aiburner_official" target="blank"><img align="center" src="https://raw.githubusercontent.com/rahuldkjain/github-profile-readme-generator/master/src/images/icons/Social/instagram.svg" alt="aiburner_official" height="30" width="40" /></a>
-@aiburner_official
+> "Generate a Manim animation demonstrating a binary search tree insertion. Render it and, once it looks good, save it as `binary_search_tree`."
