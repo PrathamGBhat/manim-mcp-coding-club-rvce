@@ -1,101 +1,105 @@
-# Implementation Plan: Isolated `.venv`, `requirements.txt`, & Model-Agnostic System Prompt
+# Implementation Plan: Post-Execution Animation Preservation (`save_animation_folder` Tool)
 
-This plan outlines how to transition `manim-mcp-server` from global Python dependencies to a self-contained project virtual environment (`.venv`), accompanied by a `requirements.txt`, while eliminating the hardcoded `MANIM_EXECUTABLE` from `.env` and preserving the model-agnostic system prompt injection.
+This plan outlines how to introduce a new MCP tool, `save_animation_folder`, that copies finalized animations from `media/manim_tmp` to a permanently named folder (e.g., `media/for_loop_till_5/`, `media/minimum_rotations_to_sort_array/`).
 
----
-
-## 1. Problem & Goals
-
-### Current Issues:
-1. **Global Dependency Coupling**: The server currently relies on globally installed pip packages (`manim`, `mcp`, `python-dotenv`) in `C:\Users\ADMIN\AppData\Local\Programs\Python\Python314\`.
-2. **Hardcoded Paths in `.env`**: `.env` currently contains a machine-specific executable path (`MANIM_EXECUTABLE="C:\...\Scripts\manim.exe"`).
-3. **Reproducibility**: New users or different machines must figure out and manually install the correct dependency versions.
-
-### Objectives:
-1. **Isolated Virtual Environment (`.venv`)**: Create and manage all dependencies inside `.venv` in the project root.
-2. **Explicit Dependency Manifest (`requirements.txt`)**: Document all project requirements with compatible versions.
-3. **Zero Path Configuration**: In `src/manim_server.py`, invoke Manim directly via the active Python interpreter (`[sys.executable, "-m", "manim", ...]`), completely eliminating `MANIM_EXECUTABLE` from `.env`.
-4. **Clean `.env`**: Dedicate `.env` solely to the model-agnostic `SYSTEM_PROMPT`.
-5. **Git Hygiene**: Ignore `.venv` and `.env` in `.gitignore`.
+This design leaves `execute_manim_code` completely untouched and stateless, allowing the LLM to freely iterate and fix errors in scratch before committing a named copy.
 
 ---
 
-## 2. Architecture & Execution Flow
+## 1. Architectural Advantages
 
 ```
-+-----------------------------------------------------------------------------------+
-| MCP Client (OpenCode / Claude Desktop / Cursor)                                    |
-|   command: [ "<repo>/.venv/Scripts/python.exe", "<repo>/src/manim_server.py" ]    |
-+-----------------------------------------------------------------------------------+
-                                         │
-                                         ▼ (Runs inside .venv)
-+-----------------------------------------------------------------------------------+
-| manim-mcp-server (Python Process)                                                 |
-|                                                                                   |
-|  1. sys.executable points to .venv/Scripts/python.exe                             |
-|  2. Loads .env (SYSTEM_PROMPT)                                                    |
-|  3. MCPServer(instructions=SYSTEM_PROMPT)                                         |
-|  4. @mcp.tool(description=SYSTEM_PROMPT + docstring)                              |
-|  5. execute_manim_code runs:                                                      |
-|       subprocess.run([sys.executable, "-m", "manim", "-p", script_path])          |
-+-----------------------------------------------------------------------------------+
+                                  [ User Request ]
                                          │
                                          ▼
-                     (Executes via .venv/Lib/site-packages/manim)
+                   +--------------------------------------------+
+                   | Step 1: execute_manim_code(...)            |
+                   |   - Renders directly into media/manim_tmp  |
+                   |   - Scratchpad: safe to re-run and fix     |
+                   |     syntax or layout errors iteratively    |
+                   +--------------------------------------------+
+                                         │ (On Success)
+                                         ▼
+                   +--------------------------------------------+
+                   | Step 2: save_animation_folder(folder_name) |
+                   |   - Sanitizes LLM-chosen snake_case name   |
+                   |   - Copies media/manim_tmp/                |
+                   |     -> media/<sanitized_name>/             |
+                   |   - Preserves video + scene.py permanently |
+                   +--------------------------------------------+
+```
+
+### Why this design is best:
+1. **Zero Global State**: `execute_manim_code` does not track or hold session variables in memory. Each run uses `media/manim_tmp`.
+2. **Scratchpad Iteration**: If the model makes a syntax mistake or overlapping shapes, it retries in `manim_tmp` without creating orphaned, half-broken folders.
+3. **Preservation**: Successful animations are permanently organized by topic in `media/`.
+
+---
+
+## 2. Name Sanitization & Safety
+
+Because `folder_name` is provided by the LLM, it must be sanitized against path traversal (`../`) and illegal filesystem characters:
+
+```python
+import re
+
+def sanitize_folder_name(name: str) -> str:
+    """Sanitize the animation folder name to safe snake_case."""
+    if not name or not name.strip():
+        return "saved_animation"
+    
+    clean = name.strip().lower()
+    # Replace spaces and hyphens with underscores
+    clean = re.sub(r'[\s\-]+', '_', clean)
+    # Remove any character that is not alphanumeric or underscore
+    clean = re.sub(r'[^a-z0-9_]', '', clean)
+    # Collapse multiple underscores
+    clean = re.sub(r'_+', '_', clean).strip('_')
+    
+    return clean[:64] or "saved_animation"
 ```
 
 ---
 
-## 3. Step-by-Step Implementation
+## 3. Concrete Implementation
 
-### Step 1: Create `requirements.txt`
-In the project root, create `requirements.txt`:
-```text
-mcp>=1.0.0
-manim
-python-dotenv
-```
+### File: `src/manim_server.py`
 
----
-
-### Step 2: Create and Populate `.venv`
-Run the following commands in the workspace root:
-```powershell
-# 1. Create the virtual environment
-python -m venv .venv
-
-# 2. Upgrade pip and install project dependencies
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
----
-
-### Step 3: Refactor `src/manim_server.py`
-Remove `MANIM_EXECUTABLE` and replace the execution command with `sys.executable -m manim`:
+Add `save_animation_folder` alongside the existing tools, preserving all existing comments, docstrings, and structure verbatim:
 
 ```python
 import subprocess
 import os
-import sys
 import shutil
+import sys
+import re
 
-# --- 1. Load .env from Project Root ---
+from dotenv import load_dotenv
+
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_FILE = os.path.join(ROOT_DIR, ".env")
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(dotenv_path=ENV_FILE)
-except ImportError:
-    pass
+load_dotenv(dotenv_path=ENV_FILE)
 
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "").strip()
+MANIM_EXECUTABLE = os.getenv("MANIM_EXECUTABLE")
 
-# Optional override; defaults to running manim via the active environment interpreter
-MANIM_EXECUTABLE = os.getenv("MANIM_EXECUTABLE", "")
+TEMP_DIRS = {}
+BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media")
+os.makedirs(BASE_DIR, exist_ok=True) 
 
-# --- 2. Initialize MCP Server ---
+EXECUTE_TOOL_DESC = SYSTEM_PROMPT or "Execute the Manim code"
+
+def sanitize_folder_name(name: str) -> str:
+    """Sanitize the animation folder name to safe snake_case."""
+    if not name or not name.strip():
+        return "saved_animation"
+    clean = name.strip().lower()
+    clean = re.sub(r'[\s\-]+', '_', clean)
+    clean = re.sub(r'[^a-z0-9_]', '', clean)
+    clean = re.sub(r'_+', '_', clean).strip('_')
+    return clean[:64] or "saved_animation"
+
+# Initialize MCP Server
 try:
     from mcp.server.mcpserver import MCPServer as MCPServerClass  # v2
 except ImportError:
@@ -103,35 +107,37 @@ except ImportError:
 
 mcp = MCPServerClass("manim-server", instructions=SYSTEM_PROMPT or None)
 
-TEMP_DIRS = {}
-BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media")
-os.makedirs(BASE_DIR, exist_ok=True)
 
-EXECUTE_TOOL_DESC = "Execute the Manim animation code."
-if SYSTEM_PROMPT:
-    EXECUTE_TOOL_DESC += (
-        f"\n\n### MANDATORY GUIDELINES & SYSTEM PROMPT FOR GENERATING MANIM CODE:\n"
-        f"{SYSTEM_PROMPT}"
-    )
+@mcp.tool()
+def cleanup_manim_temp_dir(directory: str) -> str:
+    """Clean up the specified Manim temporary directory after execution."""
 
-# --- 3. Tool Definitions ---
+    try:
+        if os.path.exists(directory):
+            shutil.rmtree(directory)
+            return f"Cleanup successful for directory: {directory}"
+        else:
+            return f"Directory not found: {directory}"
+    except Exception as e:
+        return f"Failed to clean up directory: {directory}. Error: {str(e)}"
+
+
 @mcp.tool(description=EXECUTE_TOOL_DESC)
 def execute_manim_code(manim_code: str) -> str:
     """Execute the Manim code"""
-    tmpdir = os.path.join(BASE_DIR, "manim_tmp")
+
+    tmpdir = os.path.join(BASE_DIR, "manim_tmp") 
     os.makedirs(tmpdir, exist_ok=True)
     script_path = os.path.join(tmpdir, "scene.py")
-
+    
     try:
+
+        # Write the Manim script to the temp directory
         with open(script_path, "w", encoding="utf-8") as script_file:
             script_file.write(manim_code)
-
-        # Use explicitly provided executable or default to current venv python -m manim
-        if MANIM_EXECUTABLE:
-            cmd = [MANIM_EXECUTABLE, "-p", script_path]
-        else:
-            cmd = [sys.executable, "-m", "manim", "-p", script_path]
-
+        
+        # Execute Manim with the correct path
+        cmd = [MANIM_EXECUTABLE, "-p", script_path] if MANIM_EXECUTABLE else [sys.executable, "-m", "manim", "-p", script_path]
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -154,17 +160,30 @@ def execute_manim_code(manim_code: str) -> str:
     except Exception as e:
         return f"Error during execution: {str(e)}"
 
+
 @mcp.tool()
-def cleanup_manim_temp_dir(directory: str) -> str:
-    """Clean up the specified Manim temporary directory after execution."""
+def save_animation_folder(folder_name: str) -> str:
+    """Save and copy the current rendered animation from manim_tmp into a permanently named folder.
+
+    Args:
+        folder_name: Short, concise snake_case name representing the animation 
+                     (e.g., 'for_loop_till_5', 'minimum_rotations_to_sort_array', 
+                     'binary_search_tree').
+    """
+    tmpdir = os.path.join(BASE_DIR, "manim_tmp")
+
+    if not os.path.exists(tmpdir) or not os.listdir(tmpdir):
+        return "No animation found in manim_tmp to save. Run execute_manim_code successfully first."
+
+    clean_name = sanitize_folder_name(folder_name)
+    target_dir = os.path.join(BASE_DIR, clean_name)
+
     try:
-        if os.path.exists(directory):
-            shutil.rmtree(directory)
-            return f"Cleanup successful for directory: {directory}"
-        else:
-            return f"Directory not found: {directory}"
+        shutil.copytree(tmpdir, target_dir, dirs_exist_ok=True)
+        return f"Successfully saved animation to: {target_dir}"
     except Exception as e:
-        return f"Failed to clean up directory: {directory}. Error: {str(e)}"
+        return f"Failed to save animation to {target_dir}. Error: {str(e)}"
+
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
@@ -172,70 +191,26 @@ if __name__ == "__main__":
 
 ---
 
-### Step 4: Clean Up `.env`
-Remove `MANIM_EXECUTABLE=...` so `.env` only holds configuration:
+## 4. Instructing the Model via `.env` (`SYSTEM_PROMPT`)
+
+To ensure any model invokes `save_animation_folder` right after a successful execution, append workflow instructions to `SYSTEM_PROMPT` in `.env`:
+
 ```env
 SYSTEM_PROMPT="
-Role & Instructions:
-You are an expert in Manim (Community Edition) animation programming.
-When generating code for execute_manim_code:
-1. Always import manim using: from manim import *
-2. Define a single main scene class that inherits from Scene (e.g. class GeneratedScene(Scene):).
-3. Inside construct(self), add visual objects using self.play(...) or self.add(...).
-4. Ensure all animations have explicit run times and sensible frame positioning (e.g. UP, DOWN, LEFT, RIGHT).
-5. Never call interactive CLI prompts (input(), getpass()) or infinite loops.
-6. Use modern Manim Community syntax (e.g., Create, Transform, FadeIn) rather than deprecated methods (ShowCreation).
-7. Output pure executable Python code suitable for direct execution.
+...
+Workflow:
+1. Generate the Manim code and call `execute_manim_code`.
+2. If execution fails, review the error, fix the code, and retry with `execute_manim_code`.
+3. Once the video has been generated successfully, call `save_animation_folder` with the shortest, most appropriate snake_case name for the concept (e.g., 'for_loop_till_5', 'binary_search_tree') to permanently save it.
 "
 ```
 
 ---
 
-### Step 5: Update `.gitignore`
-Ensure `.gitignore` contains:
-```gitignore
-*.pyc
-__pycache__/
-.venv/
-.env
-```
+## 5. Verification Checklist
 
----
-
-### Step 6: Update MCP Client Configs
-
-#### OpenCode (`~/.config/opencode/opencode.jsonc`)
-Point to the virtual environment's python executable:
-```jsonc
-    "manim": {
-      "type": "local",
-      "command": [
-        "C:\\Users\\ADMIN\\OneDrive\\Desktop\\manim-mcp-server\\.venv\\Scripts\\python.exe",
-        "C:\\Users\\ADMIN\\OneDrive\\Desktop\\manim-mcp-server\\src\\manim_server.py"
-      ]
-    }
-```
-
-#### Claude Desktop (`claude_desktop_config.json`)
-```json
-{
-  "mcpServers": {
-    "manim-server": {
-      "command": "C:\\Users\\ADMIN\\OneDrive\\Desktop\\manim-mcp-server\\.venv\\Scripts\\python.exe",
-      "args": [
-        "C:\\Users\\ADMIN\\OneDrive\\Desktop\\manim-mcp-server\\src\\manim_server.py"
-      ]
-    }
-  }
-}
-```
-
----
-
-## 4. Verification Checklist
-
-- [ ] **Virtual Environment Integrity**: Ensure `.venv/Scripts/python.exe` exists and can run `python -m manim --help`.
-- [ ] **Server Startup in `.venv`**: Execute `.\.venv\Scripts\python.exe src/manim_server.py` to verify imports and initialization.
-- [ ] **Prompt Ingestion**: Verify `SYSTEM_PROMPT` is read from `.env` and attached to `execute_manim_code` tool metadata.
-- [ ] **End-to-End Render Test**: Run a test render via `execute_manim_code` and confirm video renders in `src/media/manim_tmp`.
-- [ ] **Client Connection**: Connect via OpenCode / Claude Desktop and verify the server operates normally.
+- [ ] **Empty State Guard**: Call `save_animation_folder("test")` before any render; verify it reports that no animation is found in `manim_tmp`.
+- [ ] **Sanitization**: Test names with spaces (`"For Loop 5"`) and path traversal (`"../../hack"`), ensuring they map safely to `media/for_loop_5` and `media/hack`.
+- [ ] **Copy Completeness**: After a successful `execute_manim_code`, call `save_animation_folder("test_anim")` and verify `media/test_anim/` contains both `scene.py` and the `videos/` subfolder.
+- [ ] **Subsequent Overwrite Isolation**: Render a second animation in `manim_tmp` and save it as `"test_anim_2"`; verify `media/test_anim/` is completely preserved.
+- [ ] **Comments & Structure Integrity**: Verify 100% of existing comments in `src/manim_server.py` are unchanged.
